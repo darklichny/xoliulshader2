@@ -4,6 +4,9 @@
 
 -- Bugs:
 
+-- Todo: 
+--		Texture slots should not be a button, ( the on changed event doesn't work )
+
 -- Reference:
 -- http://www.cgcookie.com/articles/2008/11/22/custom-scripted-shader-in-3d-studio-max
 -- http://tech-artists.org/wiki/MAXScript_DirectX_Scripted_Material_Plugin
@@ -15,18 +18,28 @@ plugin material XoliulShader2
 	name:"Xoliul Shader 2"
 	classID:#(0x31ef8010, 0x24038596)
 	extends:DirectX_9_Shader replaceUI:true version:1
-(
+(	
 -----------------------------------------------------------
 -- Interface design params
 -----------------------------------------------------------
 	parameters param_main rollout:roll_main
 	(
-		g_technique type:#integer default:1 ui:dd_technique
-		on g_technique set val do (
+		technique type:#integer default:1 ui:dd_technique
+		on technique set val do (
 			delegate.Technique = val - 1			
+			print "test"
 		)
-	)	
+	)
 	
+	parameters param_textures rollout:roll_textures
+	(
+		diffuseTex type:#bitmap ui:btn_diffuseTex
+		on diffuseTex changed val do 
+		(
+			print "bollocks"
+			--delegate.g_DiffuseTexture = val			
+		)
+	)
 
 -----------------------------------------------------------
 -- Rollout and buttons definition
@@ -122,6 +135,36 @@ plugin material XoliulShader2
 		)			
 	)
 
+	rollout roll_textures "Textures"
+	(	
+		button btn_diffuseTex "Diffuse Texture" width:160 height:16
+		
+		on roll_textures open do
+		(					
+			if delegate != undefined then
+			(
+				if delegate.diffuseMap != undefined then
+				(
+					btn_diffuseTex.caption = delegate.diffuseMap.filename
+					btn_diffuseTex.tooltip = btn_diffuseTex.caption
+				)
+			)-- delegate?
+		)		
+		
+		--here we want to open an explorer window for the user to find his diffuse texture
+		on btn_diffuseTex pressed do
+		(			
+			try (
+				texPath = selectbitmap caption: "Diffuse Texture"
+				if texPath != undefined then
+				(
+					delegate.diffuseMap = texPath					 
+					btn_diffuseTex.caption  = delegate.diffuseMap.filename
+					btn_diffuseTex.tooltip = btn_diffuseTex.caption
+				)							
+			) catch ()
+		)
+	)
 -----------------------------------------------------------	
 -- Shader creation in the material editor
 -----------------------------------------------------------	
@@ -129,7 +172,7 @@ plugin material XoliulShader2
 	(				
 		print ""
 		print "Creating scripted material"
-		roll_main.LoadFxFile()
+		roll_main.LoadFxFile()		
 	)  
 
 

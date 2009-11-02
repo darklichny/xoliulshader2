@@ -1,535 +1,76 @@
-
-//3DS Max viewport shader by Laurens Corijn, http://www.laurenscorijn.com
-//Big thanks to Ben Cloward for always being the guy to ask shader questions to; http://www.bencloward.com
-//thanks to Jeroen Maton and Lumonix ShaderFX, http://www.jeroenmaton.net, http://www.lumonix.net
-//thanks to Brice Vandemoortele for informing me about texCUBElod, made IBL easier and reflection gloss possible! http://www.mentalwarp.com
-
+//----------------------------------------------------------------------------------------------------------------------
+// 3DS Max viewport shader by Laurens Corijn, http://www.laurenscorijn.com
+// Big thanks to Ben Cloward for always being the guy to ask shader questions to; http://www.bencloward.com
+// thanks to Jeroen Maton and Lumonix ShaderFX, http://www.jeroenmaton.net, http://www.lumonix.net
+// thanks to Brice Vandemoortele for informing me about texCUBElod, made IBL easier and reflection gloss possible! http://www.mentalwarp.com
+//----------------------------------------------------------------------------------------------------------------------
 string ParamID = "0x003"; //use DXSAS compiler
 
-#include <X_genFunc.fxh>
+#include <X_TextureSamplers.fxh> // All our maps
+#include <X_Common.fxh> // Common shader functions
+#include <X_Parameters.fxh>// Our parameters
 
-//***************************************************************** DATAMEMBERS
-//motherload of stuff here, most is straightforward so uncommented
-
-
-struct LightStruct  //struct with lightinfo, easier to work with.
-{
-	float4 LightVec;
-	float4 LightColor; //this value is 32 bit: it is NOT clamped by Max to 8bit per channel, so light color also includes the intensity, since they are mutliplied before Max hads them over
-};
-			
-LightStruct lightsarray[3]; //3-light array
-
-
+//----------------------------------------------------------------------------------------------------------------------
+// Shadows
+//----------------------------------------------------------------------------------------------------------------------
 // these elements are required for projected shadows 
-//SHADOWCODE
 #include <shadowMap.fxh> 
-
 float  ShadowFloats[3];
 float  ShadowStrengths[3];
-
-
-//===========LIGHTS
-
-float4 light1_Position : POSITION
-<
-	string UIName = "Light 1 Position";
-	string Object = "PointLight";
-	string Space = "World";
-	int refID = 1; 								//refID for automatic lightcolor input
->;// = {100.0f, 100.0f, 100.0f, 0.0f};
-
-//lightcolor = lightrgb x lightmultiplier, done by Max
-float4 light1Color : LIGHTCOLOR <int LightRef = 1; string UIWidget = "None"; > = { 1.0f, 1.0f, 1.0f, 1.0f}; 	//lightref ID makes sure that max fills in this value automatically
-
-
 
 //SHADOWCODE
 SHADOW_FUNCTOR(shadowTerm1); //Only 1 shadow supported, more is just not necessary and not worth the effort and trouble. the shader would also become too slow and messy because of it
 //SOFTSHADOW
 //SOFT_SHADOW_FUNCTOR(SoftShadowTerm1, 000, float4(10,5,0.01,0), false); // NOTE: '000' represents for omni light, '001' is spot, and '002' is direct.
 
-bool bUseShadow1
-<
-    string gui = "slider";
-    string UIName = "     Use Shadow 1";
-> = false;
-
-float Shadow1Soft
-<
-	string UIName = "     Shadow1 Blur";
-	string UIWidget = "FloatSpinner";
-	float UIMin = 0.0f;
-	float UIMax = 50.0f;
-> = {0.0f};
-
-float Shadow1Strength
-<
-	string UIName = "     Shadow1 Intensity";
-	string UIWidget = "FloatSpinner";
-	float UIMin = 0.0f;
-	float UIMax = 1.0f;
-> = {1.0f};
-
-float DistanceBlur
-<
-	string UIName = "     Distance Shadow Blur";
-	string UIWidget = "FloatSpinner";
-> = {3.0f};
-
-
-
-float4 light2_Position : POSITION
-<
-	string UIName = "Light 2 Position";
-	string Object = "PointLight";
-	string Space = "World";
-	int refID = 2;
->;// = {100.0f, 100.0f, 100.0f, 1.0f};
-
-float4 light2Color : LIGHTCOLOR <int LightRef = 2; string UIWidget = "None"; > = { 1.0f, 1.0f, 1.0f, 1.0f}; 
-
-float4 light3_Position : POSITION
-<
-	string UIName = "Light 3 Position";
-	string Object = "PointLight";
-	string Space = "World";
-	int refID = 3;
->;// = {100.0f, 100.0f, 100.0f, 1.0f};
-
-float4 light3Color : LIGHTCOLOR <int LightRef = 3; string UIWidget = "None"; > = { 1.0f, 1.0f, 1.0f, 1.0f}; 
-
-bool bUseHalfLambert
-<
-    string gui = "slider";
-    string UIName = "     Half Lambert Shading";
-> = false;
-
-float HalfLambertPower
-<
-string UIName = "         Half Lambert Power";
-string UIType = "FloatSpinner";
-float UIMin = 0.0f;
-float UIMax = 10.0f;
-float UIStep = 0.1;
-> = 2;
-
-float3 ambientcolor
-<
-	string UIName = "     Ambient Color";
-	string UIWidget = "Color";
-> = {0.0f, 0.0f, 0.0f};
-
-bool bUseIBL
-<
-    string gui = "slider";
-    string UIName = "         Use IBL cubemap for Ambient";
-> = false;
-
-
-bool bUseIBLCubeMap
-<
-    string gui = "slider";
-    string UIName = "         Share Reflection Cubemap for IBL";
-> = false;
-
-texture IBLcubemap
-<
-	string ResourceName = "";
-	string UIName = "     IBL Cubemap";
-	string ResourceType = "Cube";
->;
-
-samplerCUBE IBLcubemapSampler = sampler_state
+//SHADOWCODE
+//shadow blur lookup function
+//special multisample function made by Laurens
+//HEAVY ON PERFORMANCE due to crappy 3DS max shadow API
+float ShadowLookUp(float4 position, float3 tangent, float3 binormal, float blur)
 {
-	Texture = <IBLcubemap>;
-	MinFilter = LINEAR;
-	MagFilter = LINEAR;
-	MipFilter = LINEAR;
-	AddressU = WRAP;
-	AddressV = WRAP;
-};
+	float blurscale = sqrt(blur);
+	float shadowleftup = shadowTerm1(position + float4((tangent*blurscale).xyz,0)+ float4((binormal*blurscale).xyz,0)); // sample shadows around pixel location, sampling depth determined by blur scale
+	float shadowleftdown = shadowTerm1(position + float4((tangent*blurscale).xyz,0)- float4((binormal*blurscale).xyz,0));
+	float shadowrightup = shadowTerm1(position - float4((tangent*blurscale).xyz,0)+ float4((binormal*blurscale).xyz,0));
+	float shadowrightdown = shadowTerm1(position - float4((tangent*blurscale).xyz,0)- float4((binormal*blurscale).xyz,0));
+	float shadowtotal = (shadowleftup+shadowleftdown+shadowrightup+shadowrightdown)/4; //average 4 samples
+	return shadowtotal;
+}
 
-float IBLBlur
-<
-string UIName = "         Ambient Cube Blur";
-string UIType = "FloatSpinner";
-float UIMin = 0.0f;
-float UIMax = 10.0f;
-float UIStep = 0.1f;
-> = 6.0f;
-
-float IBLmultiplier
-<
-string UIName = "         Ambient Cube Strength";
-string UIType = "FloatSpinner";
-float UIMin = 0.0f;
-float UIMax = 2.0f;
-float UIStep = 0.05;
-> = 0.5;
-
-int numberOfActiveLights
-<
-string UIName = "     Active Lights";
-string UIType = "FloatSpinner";
-float UIMin = 0.0f;
-float UIMax = 3.0f;
-float UIStep = 1.0;
-> = 1;
-
-//==========DIFFUSEMAP
-
-bool bUseDiffuseMap
-<
-    string gui = "slider";
-    string UIName = "Diffuse Map";
-> = false;
-
-half4 diffuseColor : DIFFUSECOLOR
-<
-	string UIWidget = "Color";
-    string UIName = "     Diffuse Color";
-> = {0.5f, 0.5f, 0.5f, 1.0f};
-
-texture diffuseMap : DIFFUSEMAP
-<
-	string name ="";
-	string UIName = "     Diffuse Map";	
-	int Texcoord = 0;
-
->;
-
-
-bool bColorDiffuse
-<
-    string gui = "slider";
-    string UIName = "     Color Diffuse Map";
-> = false;
-
-
-sampler2D diffuseSampler = sampler_state
+//----------------------------------------------------------------------------------------------------------------------
+// Lights
+//----------------------------------------------------------------------------------------------------------------------
+struct LightStruct  //struct with lightinfo, easier to work with.
 {
-	Texture = <diffuseMap>;
-	MinFilter = ANISOTROPIC;
-	MagFilter = ANISOTROPIC;
-	MipFilter = ANISOTROPIC;
-	AddressU = WRAP;
-	AddressV = WRAP;
-};
+	float4 LightVec;
+	float4 LightColor; //this value is 32 bit: it is NOT clamped by Max to 8bit per channel, so light color also includes the intensity, since they are mutliplied before Max hads them over
+};	
+LightStruct lightsarray[3]; //3-light array
 
-//==========OPACITYMAP
-
-bool bUseAlpha
-<
-    string gui = "slider";
-    string UIName = "     Enable alpha channel";
-	int Texcoord = 0;
-	int MapChannel = 1;	
-> = false;
-
-float GlobalOpacity
-<
-string UIName = "         Global Opacity Level";
-string UIType = "FloatSpinner";
-float UIMin = 0.0f;
-float UIMax = 1.0f;
-float UIStep = 0.05;
-> = 1;
-
-
-//==========SPECULARMAP
-
-bool bUseSpecMap
-<
-    string gui = "slider";
-    string UIName = "Spec Map";
-> = false;
-
-half4 specularColor : SPECULARCOLOR
-<
-	string UIWidget = "Color";
-    string UIName = "     Specular Color";
-> = {1.0f, 1.0f, 1.0f, 1.0f};
-
-float speclevel
-<
-string UIName = "     Specular Global Level";
-string UIType = "FloatSpinner";
-float UIMin = 0.0f;
-float UIMax = 10.0f;
-float UIStep = 0.05;
-> = 1.0f;
-
-texture specularMap : SPECULARMAP
-<
-	string name ="";
-	string UIName = "     Specular Map";
-	string ResourceType = "2D";
->;
-
-sampler2D specularSampler = sampler_state
+//Fill light array function
+void CreateLights( float4 worldspacepos )
 {
-	Texture = <specularMap>;
-	MinFilter = Linear;
-	MagFilter = Linear;
-	MipFilter = Linear;
-	AddressU = WRAP;
-	AddressV = WRAP;
-};
+	
+		lightsarray[0].LightVec = light1_Position - worldspacepos; // transform light position to world space position, put into array
+		lightsarray[0].LightColor = light1Color; // set light color to array. light color is automatically updated by Max because we use RefId's.
+		
+		lightsarray[1].LightVec = light2_Position - worldspacepos;
+		lightsarray[1].LightColor = light2Color;
+		
+		lightsarray[2].LightVec = light3_Position - worldspacepos;
+		lightsarray[2].LightColor = light3Color;
+	
+}
 
-//==========GLOSSMAP
-
-bool bUseGlossMap
-<
-    string gui = "slider";
-    string UIName = "Gloss Map";
-> = false;
-
-texture glossMap : GLOSSINESS
-<
-	string name ="";
-	string UIName = "     Gloss Map";
-	string ResourceType = "2D";
->;
-
-sampler2D glossinessSampler = sampler_state
-{
-Texture = <glossMap>;
-	MinFilter = Linear;
-	MagFilter = Linear;
-	MipFilter = Linear;
-	AddressU = WRAP;
-	AddressV = WRAP;
-};
-
-float glossiness
-<
-	string UIName = "     Glossiness Level";
-	string UIType = "FloatSpinner";
-	float UIMin = 0.0f;
-	float UIMax = 100.0f;
-	float UIStep = 0.05;
-> = 25.0f;
-
-float glossoffset
-<
-	string UIName = "     Glossmap Offset";
-	string UIType = "FloatSpinner";
-	float UIMin = 0.0f;
-	float UIMax = 100.0f;
-	float UIStep = 0.05;
-> = 10.0f;
- 
-//==========NORMALMAP
- 
-bool bUseNormalMap
-<
-    string gui = "slider";
-    string UIName = "Normal Map";
-> = false;
-
-bool bUseObjectNormals
-<
-    string gui = "slider";
-    string UIName = "     Object Space";
-> = false;
-
-
-texture normalMap : NORMALMAP
-<
-	string name ="";
-	string UIName = "     Normal Map";
-	string ResourceType = "2D";
->;
-
-bool bFlipGreenChannel
-<
-    string gui = "slider";
-    string UIName = "     Flip Green";
-> = false;
-
-sampler2D normalSampler = sampler_state
-{
-	Texture = <normalMap>;
-	MinFilter = Linear;
-	MagFilter = Linear;
-	MipFilter = Linear;
-	AddressU = WRAP;
-	AddressV = WRAP;
-};
-
-//==========GLOWMAP
-
-bool bUseSIMap
-<
-    string gui = "slider";
-    string UIName = "Self Illumination Map";
-> = false;
-
-texture siMap : SIMAP
-<
-	string name ="";
-	string UIName = "     SI Map";
->;
-
-sampler2D siMapSampler = sampler_state
-{
-	Texture = <siMap>;
-	MinFilter = Linear;
-	MagFilter = Linear;
-	MipFilter = Linear;
-	AddressU = WRAP;
-	AddressV = WRAP;
-};
-
-float siMapMult<
-	string UIName = "     SI Map Multiply";
-	string UIType = "FloatSpinner";
-	float UIMin = 1.0f;
-	float UIMax = 10.0f;
-> = 1.0f;
-
-float siLevel<
-	string UIName = "     Global SI Level";
-	string UIType = "FloatSpinner";
-	float UIMin = 0.0f;
-	float UIMax = 100.0f;
-	float UIStep = 1.0f;
-> = 0;
-
-//==========Reflections
-
-bool bUseFresnel
-<
-    string gui = "slider";
-    string UIName = "Use Fresnel Reflections";
-> = false;
-
-bool bAlphaMasksFresnel
-<
-    string gui = "slider";
-    string UIName = "     Alpha Affects Reflections";
-> = false;
-
-float FresnelPower
-<
-	string UIWidget = "Spinner";
-	float UIMin = 0.0;
-	float UIMax = 100.0;
-	float UIStep = 0.1;
-	string UIName = "     Fresnel Power";
-> = 3.0;
- 
- 
-float FresnelBias
-<
-	string UIWidget = "Spinner";
-	float UIMin = 0.0;
-	float UIMax = 1.0;
-	float UIStep = 0.01;
-	string UIName = "     Fresnel Bias";
-> = 0.0;
-
-float FresnelMult
-<
-	string UIWidget = "Spinner";
-	float UIMin = 0.0;
-	float UIMax = 100.0;
-	float UIStep = 0.1;
-	string UIName = "     Fresnel Multiplier";
-> = 2.0;
-
-float3 FresnelColor 
-<
-	string UIWidget = "Color";
-    string UIName = "     Rim Color";
-> = {1.0f, 1.0f, 1.0f};
-
-float FresnelMaskHardness
-<
-	string UIWidget = "Spinner";
-	float UIMin = 0.0;
-	float UIMax = 100.0;
-	float UIStep = 0.1;
-	string UIName = "     Fresnel Mask Hardness";
-> = 4.0;
-
-bool bUseWorldMask
-<
-    string gui = "slider";
-    string UIName = "     Use Hard-Type World Masking";
-> = true;
-
-bool bUseReflMap
-<
-    string gui = "slider";
-    string UIName = "     Reflection Map";
-> = false;
-
-texture ReflMap 
-<
-	string name ="";
-	string UIName = "     Reflect Map";
->;
-
-sampler2D ReflMapSampler = sampler_state
-{
-	Texture = <ReflMap>;
-	MinFilter = Linear;
-	MagFilter = Linear;
-	MipFilter = Linear;
-	AddressU = WRAP;
-	AddressV = WRAP;
-};
-
-bool bUseCubeMap
-<
-    string gui = "slider";
-    string UIName = "     Reflect Cubemap";
-> = false;
-
-texture reflcubemap : environment
-<
-	string ResourceName = "";
-	string UIName = "     Cubemap";
-	string ResourceType = "Cube";
->;
-
- 
-samplerCUBE reflcubemapSampler = sampler_state
-{
-	Texture = <reflcubemap>;
-	MinFilter = LINEAR;
-	MagFilter = LINEAR;
-	MipFilter = LINEAR;
-	AddressU = WRAP;
-	AddressV = WRAP;
-};
-
-float CubeMapBlur
-<
-	string UIWidget = "Spinner";
-	float UIMin = 0.0;
-	float UIMax = 10.0;
-	float UIStep = 0.1;
-	string UIName = "     Cubemap Blur";
-> = 0.0;
-bool bUseReflGloss
-<
-    string gui = "slider";
-    string UIName = "         Use Glossmap for blur";
-> = false;
-
-
-
-//----------------------------------VS & PS structs 
-
-
+//----------------------------------------------------------------------------------------------------------------------
+// VS & PS structs 
+//----------------------------------------------------------------------------------------------------------------------
 // input from application for Vertex Shader
 struct VS_InputStruct {
 	float4 position		: POSITION;
 	float2 texCoord		: TEXCOORD0;
-	float2 texCoord2		: TEXCOORD1;
+	float2 texCoord2	: TEXCOORD1;
 	float3 tangent		: TANGENT;
 	float3 binormal		: BINORMAL;
 	float3 normal		: NORMAL;
@@ -547,42 +88,9 @@ struct VS_To_PS_Struct {
 		float4 worldSpacePos	: TEXCOORD5;
 };
 
-
-
-//Fill light array function
-void CreateLights( float4 worldspacepos )
-{
-	
-		lightsarray[0].LightVec = light1_Position - worldspacepos; // transform light position to world space position, put into array
-		lightsarray[0].LightColor = light1Color; // set light color to array. light color is automatically updated by Max because we use RefId's.
-		
-		lightsarray[1].LightVec = light2_Position - worldspacepos;
-		lightsarray[1].LightColor = light2Color;
-		
-		lightsarray[2].LightVec = light3_Position - worldspacepos;
-		lightsarray[2].LightColor = light3Color;
-	
-}
-
-//SHADOWCODE
-//shadow blur lookup function
-//special multisample function made by Laurens
-//HEAVY ON PERFORMANCE due to crappy 3DS max shadow API
-float ShadowLookUp(float4 position, float3 tangent, float3 binormal, float blur)
-{
-	float blurscale = sqrt(blur);
-	float shadowleftup = shadowTerm1(position + float4((tangent*blurscale).xyz,0)+ float4((binormal*blurscale).xyz,0)); // sample shadows around pixel location, sampling depth determined by blur scale
-	float shadowleftdown = shadowTerm1(position + float4((tangent*blurscale).xyz,0)- float4((binormal*blurscale).xyz,0));
-	float shadowrightup = shadowTerm1(position - float4((tangent*blurscale).xyz,0)+ float4((binormal*blurscale).xyz,0));
-	float shadowrightdown = shadowTerm1(position - float4((tangent*blurscale).xyz,0)- float4((binormal*blurscale).xyz,0));
-	float shadowtotal = (shadowleftup+shadowleftdown+shadowrightup+shadowrightdown)/4; //average 4 samples
-	return shadowtotal;
-}
-
-
-//Vertex And Pixel Shaders
-
-//VERTEX SHADER
+//----------------------------------------------------------------------------------------------------------------------
+// VERTEX SHADER
+//----------------------------------------------------------------------------------------------------------------------
 VS_To_PS_Struct vs_main(VS_InputStruct In) //vertexshader gets input struct from application, all automatically
 {
 	SetupMatrices(); //create WVP
@@ -602,7 +110,9 @@ VS_To_PS_Struct vs_main(VS_InputStruct In) //vertexshader gets input struct from
     return Out;
 }
 
-//PIXEL SHADER
+//----------------------------------------------------------------------------------------------------------------------
+// PIXEL SHADER
+//----------------------------------------------------------------------------------------------------------------------
 float4 ps_main(VS_To_PS_Struct In) : COLOR 
 { 
 	//Map Checks
@@ -851,7 +361,9 @@ float4 ps_fresnel(VS_To_PS_Struct In) : COLOR
 	return ret;
 }
 
-
+//----------------------------------------------------------------------------------------------------------------------
+// Techniques
+//----------------------------------------------------------------------------------------------------------------------
 technique SM3  
 {  
 	pass  P0
