@@ -1,0 +1,2 @@
+Building upon the 1.3 version of the "Xoliulshader", version 2.0 will be a big leap forward. FX code wil be revised and split into header files to allow for ease of customization. The default UI will be completely abandoned for a scripted material interface, relieving a lot of difficulties from the end user.
+Possible HLSL feature additions are not excluded, but are not main priority.
